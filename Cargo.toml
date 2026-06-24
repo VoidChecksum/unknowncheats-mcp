@@ -1,0 +1,25 @@
+[package]
+name = "unknowncheats-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "MCP server for UnknownCheats forum"
+repository = "https://github.com/yourname/unknowncheats-mcp"
+
+[dependencies]
+anyhow = "1"
+antibot-rs = "0.3"
+dotenvy = "0.15"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["cookies", "gzip", "json", "multipart", "rustls-tls"] }
+scraper = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "io-std", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+
+[dev-dependencies]
+maplit = "1"
