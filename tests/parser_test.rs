@@ -30,7 +30,10 @@ fn parses_seo_forum_links() {
     assert_eq!(forums.len(), 2);
     assert_eq!(forums[0].id, "valorant/");
     assert_eq!(forums[0].title, "Valorant");
-    assert_eq!(forums[0].url, "https://www.unknowncheats.me/forum/valorant/");
+    assert_eq!(
+        forums[0].url,
+        "https://www.unknowncheats.me/forum/valorant/"
+    );
     assert_eq!(forums[1].id, "other-games/");
 }
 
@@ -58,8 +61,14 @@ fn parses_seo_thread_links() {
     let threads = parse_threads(html, "https://www.unknowncheats.me/forum/").unwrap();
 
     assert_eq!(threads.len(), 2);
-    assert_eq!(threads[0].id, "other-games/758547-tbh-persistent-reward-item-generator.html");
-    assert_eq!(threads[1].id, "valorant/5249674-free-tracker-gg-profile-view-booster.html");
+    assert_eq!(
+        threads[0].id,
+        "other-games/758547-tbh-persistent-reward-item-generator.html"
+    );
+    assert_eq!(
+        threads[1].id,
+        "valorant/5249674-free-tracker-gg-profile-view-booster.html"
+    );
 }
 
 #[test]

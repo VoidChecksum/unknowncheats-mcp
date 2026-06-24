@@ -1,5 +1,5 @@
-use anyhow::Result;
 use antibot_rs::{Antibot, Provider, SessionHandle, Solution, SolveRequest};
+use anyhow::Result;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 use tracing::info;
@@ -42,7 +42,11 @@ impl CloudflareBypass {
     async fn execute(&self, request: SolveRequest) -> Result<Solution> {
         let client = self.get_or_create_client().await?;
         let mut session_slot = self.session.lock().await;
-        let cookie_count = request.cookies.as_ref().map(|cookies| cookies.len()).unwrap_or(0);
+        let cookie_count = request
+            .cookies
+            .as_ref()
+            .map(|cookies| cookies.len())
+            .unwrap_or(0);
 
         for attempt in 0..2 {
             if session_slot.is_none() {

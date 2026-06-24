@@ -45,7 +45,11 @@ pub fn parse_forums(html: &str, base_url: &str) -> Result<Vec<Forum>> {
             let url = base.join(href)?;
             if let Some(id) = query_id(url.query().unwrap_or(""), "f") {
                 if seen.insert(id.clone()) {
-                    out.push(Forum { id, title, url: url.to_string() });
+                    out.push(Forum {
+                        id,
+                        title,
+                        url: url.to_string(),
+                    });
                 }
             }
             continue;
@@ -54,7 +58,11 @@ pub fn parse_forums(html: &str, base_url: &str) -> Result<Vec<Forum>> {
         let url = base.join(href)?;
         if let Some(id) = seo_forum_id(&url, &base, &element) {
             if seen.insert(id.clone()) {
-                out.push(Forum { id, title, url: url.to_string() });
+                out.push(Forum {
+                    id,
+                    title,
+                    url: url.to_string(),
+                });
             }
         }
     }
@@ -93,7 +101,11 @@ pub fn parse_threads(html: &str, base_url: &str) -> Result<Vec<Thread>> {
             let url = base.join(href)?;
             if let Some(id) = query_id(url.query().unwrap_or(""), "t") {
                 if seen.insert(id.clone()) {
-                    out.push(Thread { id, title, url: url.to_string() });
+                    out.push(Thread {
+                        id,
+                        title,
+                        url: url.to_string(),
+                    });
                 }
             }
             continue;
@@ -102,7 +114,11 @@ pub fn parse_threads(html: &str, base_url: &str) -> Result<Vec<Thread>> {
         let url = base.join(href)?;
         if let Some(id) = seo_thread_id(&url, &base) {
             if seen.insert(id.clone()) {
-                out.push(Thread { id, title, url: url.to_string() });
+                out.push(Thread {
+                    id,
+                    title,
+                    url: url.to_string(),
+                });
             }
         }
     }
