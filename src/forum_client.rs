@@ -3,11 +3,16 @@ use crate::{
     config::{Config, ForumConfig},
     parser,
 };
-use anyhow::{bail, Result};
-use reqwest::{header, multipart, Client, StatusCode};
+use anyhow::{Result, bail};
+use reqwest::{
+    Client, StatusCode,
+    cookie::Jar,
+    header,
+    multipart::{Form, Part},
+};
 use std::{collections::HashMap, path::Path, sync::Arc};
-use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::info;
+use url::Url;
 
 #[derive(Clone)]
 pub struct ForumClient {
@@ -20,9 +25,8 @@ pub struct ForumClient {
 pub struct VBulletinClient {
     cfg: ForumConfig,
     http: Client,
-    /// Cloudflare bypass for sites that need it
-    cf_bypass: Arc<RwLock<Option<CloudflareBypass>>>,
-    /// Whether this client needs CF bypass
+    cookie_jar: Arc<Jar>,
+    cf_bypass: Arc<CloudflareBypass>,
     needs_cf_bypass: bool,
 }
 
@@ -35,7 +39,6 @@ pub struct UploadFile {
 impl ForumClient {
     pub fn new(cfg: Config) -> Result<Self> {
         Ok(Self {
-            // Both UC and EPVP now use Cloudflare
             unknowncheats: VBulletinClient::new(cfg.unknowncheats, true)?,
             elitepvpers: VBulletinClient::new(cfg.elitepvpers, true)?,
             enable_writes: cfg.enable_writes,
@@ -53,34 +56,41 @@ impl ForumClient {
     pub async fn list_forums(&self) -> Result<Vec<parser::Forum>> {
         self.unknowncheats().list_forums().await
     }
+
     pub async fn search_forum(&self, query: &str) -> Result<Vec<parser::Thread>> {
         self.unknowncheats().search_forum(query).await
     }
+
     pub async fn list_threads(&self, forum_id: &str) -> Result<Vec<parser::Thread>> {
         self.unknowncheats().list_threads(forum_id).await
     }
+
     pub async fn read_thread(&self, thread_id: &str) -> Result<Vec<parser::Post>> {
         self.unknowncheats().read_thread(thread_id).await
     }
+
     pub async fn get_profile(&self, user_id: &str) -> Result<String> {
         self.unknowncheats().get_profile(user_id).await
     }
+
     pub async fn get_logged_in_user(&self) -> Result<String> {
         self.unknowncheats().get_logged_in_user().await
     }
+
     pub async fn list_private_messages(&self) -> Result<String> {
         self.unknowncheats().list_private_messages().await
     }
+
     pub async fn reply_to_thread(&self, thread_id: &str, body: &str) -> Result<String> {
-        self.unknowncheats()
-            .reply_to_thread(thread_id, body)
-            .await
+        self.unknowncheats().reply_to_thread(thread_id, body).await
     }
+
     pub async fn create_thread(&self, forum_id: &str, title: &str, body: &str) -> Result<String> {
         self.unknowncheats()
             .create_thread(forum_id, title, body)
             .await
     }
+
     pub async fn send_private_message(&self, to: &str, title: &str, body: &str) -> Result<String> {
         self.unknowncheats()
             .send_private_message(to, title, body)
@@ -118,44 +128,31 @@ impl<'a> ForumHandle<'a> {
     }
 
     pub async fn list_threads(&self, forum_id: &str) -> Result<Vec<parser::Thread>> {
-        let html = self
-            .client
-            .get(&format!("forumdisplay.php?f={}", forum_id))
-            .await?;
+        let html = self.client.get(&forum_path(forum_id)).await?;
         parser::parse_threads(&html, self.client.cfg.base_url.as_str())
     }
 
     pub async fn read_thread(&self, thread_id: &str) -> Result<Vec<parser::Post>> {
-        let html = self
-            .client
-            .get(&format!("showthread.php?t={}", thread_id))
-            .await?;
+        let html = self.client.get(&thread_path(thread_id)).await?;
         parser::parse_posts(&html)
     }
 
     pub async fn get_profile(&self, user_id: &str) -> Result<String> {
-        self.client
-            .get(&format!("member.php?u={}", user_id))
-            .await
+        self.client.get(&profile_path(user_id)).await
     }
 
     pub async fn get_logged_in_user(&self) -> Result<String> {
         self.client.get("usercp.php").await
     }
 
-    /// User control panel (same as get_logged_in_user)
     pub async fn user_cp(&self) -> Result<String> {
         self.client.get("usercp.php").await
     }
 
-    /// List subscribed threads
     pub async fn subscribed_threads(&self) -> Result<String> {
-        self.client
-            .get("subscription.php?do=viewsubscription")
-            .await
+        self.client.get("subscription.php?do=viewsubscription").await
     }
 
-    /// List attachments
     pub async fn attachments(&self) -> Result<String> {
         self.client.get("profile.php?do=editattachments").await
     }
@@ -168,8 +165,7 @@ impl<'a> ForumHandle<'a> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let thread_url = format!("showthread.php?t={}", thread_id);
-        let page = self.client.get(&thread_url).await?;
+        let page = self.client.get(&thread_path(thread_id)).await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "postreply"),
@@ -179,9 +175,7 @@ impl<'a> ForumHandle<'a> {
             ("message", body),
             ("sbutton", "Submit Reply"),
         ];
-        self.client
-            .post_form("newreply.php?do=postreply&t=", form)
-            .await
+        self.client.post_form("newreply.php?do=postreply&t=", form).await
     }
 
     pub async fn create_thread(
@@ -193,8 +187,7 @@ impl<'a> ForumHandle<'a> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let newthread_url = format!("newthread.php?do=newthread&f={}", forum_id);
-        let page = self.client.get(&newthread_url).await?;
+        let page = self.client.get(&format!("newthread.php?do=newthread&f={}", forum_id)).await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "postthread"),
@@ -204,9 +197,7 @@ impl<'a> ForumHandle<'a> {
             ("message", body),
             ("sbutton", "Submit New Thread"),
         ];
-        self.client
-            .post_form("newthread.php?do=postthread&f=", form)
-            .await
+        self.client.post_form("newthread.php?do=postthread&f=", form).await
     }
 
     pub async fn send_private_message(
@@ -235,8 +226,7 @@ impl<'a> ForumHandle<'a> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let edit_url = format!("editpost.php?do=editpost&p={}", post_id);
-        let page = self.client.get(&edit_url).await?;
+        let page = self.client.get(&format!("editpost.php?do=editpost&p={}", post_id)).await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "updatepost"),
@@ -250,31 +240,27 @@ impl<'a> ForumHandle<'a> {
             .await
     }
 
-    pub async fn delete_post(&self, post_id: &str, _reason: &str) -> Result<String> {
+    pub async fn delete_post(&self, post_id: &str, reason: &str) -> Result<String> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let delete_url = format!("editpost.php?do=deletepost&p={}", post_id);
-        let page = self.client.get(&delete_url).await?;
+        let page = self.client.get(&format!("editpost.php?do=deletepost&p={}", post_id)).await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "deletepost"),
             ("p", post_id),
             ("securitytoken", token.as_deref().unwrap_or("guest")),
             ("deletepost", "delete"),
-            ("reason", ""),
+            ("reason", reason),
         ];
-        self.client
-            .post_form("editpost.php?do=deletepost", form)
-            .await
+        self.client.post_form("editpost.php?do=deletepost", form).await
     }
 
     pub async fn report_post(&self, post_id: &str, reason: &str) -> Result<String> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let report_url = format!("report.php?p={}", post_id);
-        let page = self.client.get(&report_url).await?;
+        let page = self.client.get(&format!("report.php?p={}", post_id)).await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "sendemail"),
@@ -316,13 +302,10 @@ impl<'a> ForumHandle<'a> {
 
 impl VBulletinClient {
     fn new(cfg: ForumConfig, needs_cf_bypass: bool) -> Result<Self> {
+        let cookie_jar = Arc::new(Jar::default());
+        seed_cookie_jar(&cookie_jar, &cfg.base_url, &cfg.cookie_header);
+
         let mut headers = header::HeaderMap::new();
-        if !cfg.cookie_header.trim().is_empty() {
-            headers.insert(
-                header::COOKIE,
-                header::HeaderValue::from_str(&cfg.cookie_header)?,
-            );
-        }
         headers.insert(
             header::USER_AGENT,
             header::HeaderValue::from_static(
@@ -341,16 +324,14 @@ impl VBulletinClient {
         );
         let http = Client::builder()
             .default_headers(headers)
-            .cookie_store(true)
+            .cookie_provider(cookie_jar.clone())
             .build()?;
+
         Ok(Self {
             cfg,
             http,
-            cf_bypass: Arc::new(RwLock::new(if needs_cf_bypass {
-                Some(CloudflareBypass::new())
-            } else {
-                None
-            })),
+            cookie_jar,
+            cf_bypass: Arc::new(CloudflareBypass::new()),
             needs_cf_bypass,
         })
     }
@@ -358,27 +339,22 @@ impl VBulletinClient {
     async fn get(&self, path: &str) -> Result<String> {
         let url = self.cfg.base_url.join(path)?;
         let resp = self.http.get(url.clone()).send().await?;
-
-        // Check for Cloudflare challenge (403 with specific HTML)
-        if resp.status() == StatusCode::FORBIDDEN {
-            let body = resp.text().await?;
-            if is_cloudflare_challenge(&body) {
-                if self.needs_cf_bypass {
-                    info!("Cloudflare challenge detected, bypassing via Byparr");
-                    return self.bypass_cloudflare(&url).await;
-                } else {
-                    warn!("Cloudflare challenge detected but bypass not enabled for this client");
-                }
-            }
-            bail!("403 Forbidden: {}", body);
-        }
-
-        // Check for Cloudflare in 200 response (JavaScript challenge)
         let status = resp.status();
         let body = resp.text().await?;
-        if status.is_success() && is_cloudflare_challenge(&body) && self.needs_cf_bypass {
-            info!("Cloudflare JS challenge detected in 200 response, bypassing");
-            return self.bypass_cloudflare(&url).await;
+
+        if self.is_challenge(status, &body) {
+            info!("Cloudflare challenge detected for GET {}", url);
+            let solution = self.cf_bypass.solve_get(url.as_str(), &self.cfg.cookie_header).await?;
+            self.store_solution_cookies(&url, &solution);
+            let html = solution.html().to_string();
+            if !html.is_empty() {
+                return Ok(html);
+            }
+            return self.retry_get(&url).await;
+        }
+
+        if !status.is_success() {
+            bail!("HTTP {}: {}", status, body);
         }
 
         Ok(body)
@@ -386,28 +362,60 @@ impl VBulletinClient {
 
     async fn post_form(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
         let url = self.cfg.base_url.join(path)?;
-        Ok(self
-            .http
-            .post(url)
-            .form(form)
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?)
+        let resp = self.http.post(url.clone()).form(form).send().await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+
+        if self.is_challenge(status, &body) {
+            info!("Cloudflare challenge detected for POST {}", url);
+            let fields = form
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect();
+            let solution = self
+                .cf_bypass
+                .solve_form(url.as_str(), fields, &self.cfg.cookie_header)
+                .await?;
+            self.store_solution_cookies(&url, &solution);
+            let html = solution.html().to_string();
+            if !html.is_empty() {
+                return Ok(html);
+            }
+            return self.retry_post_form(&url, form).await;
+        }
+
+        if !status.is_success() {
+            bail!("HTTP {}: {}", status, body);
+        }
+
+        Ok(body)
     }
 
     async fn post_form_owned(&self, path: &str, form: &HashMap<String, String>) -> Result<String> {
         let url = self.cfg.base_url.join(path)?;
-        Ok(self
-            .http
-            .post(url)
-            .form(form)
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?)
+        let resp = self.http.post(url.clone()).form(form).send().await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+
+        if self.is_challenge(status, &body) {
+            info!("Cloudflare challenge detected for POST {}", url);
+            let solution = self
+                .cf_bypass
+                .solve_form(url.as_str(), form.clone(), &self.cfg.cookie_header)
+                .await?;
+            self.store_solution_cookies(&url, &solution);
+            let html = solution.html().to_string();
+            if !html.is_empty() {
+                return Ok(html);
+            }
+            return self.retry_post_form_owned(&url, form).await;
+        }
+
+        if !status.is_success() {
+            bail!("HTTP {}: {}", status, body);
+        }
+
+        Ok(body)
     }
 
     async fn post_multipart_form(
@@ -417,27 +425,64 @@ impl VBulletinClient {
         files: &[UploadFile],
     ) -> Result<String> {
         let url = self.cfg.base_url.join(path)?;
-        let mut form = multipart::Form::new();
+        let resp = self
+            .http
+            .post(url.clone())
+            .multipart(build_multipart_form(fields, files).await?)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await?;
 
-        for (key, value) in fields {
-            form = form.text(key.clone(), value.clone());
+        if self.is_challenge(status, &body) {
+            info!("Cloudflare challenge detected for multipart POST {}", url);
+            let warm = self
+                .cf_bypass
+                .warm(url.as_str(), &self.cfg.cookie_header)
+                .await?;
+            self.store_solution_cookies(&url, &warm);
+            return self.retry_post_multipart(&url, fields, files).await;
         }
 
-        for file in files {
-            let bytes = tokio::fs::read(&file.path).await?;
-            let filename = Path::new(&file.path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("upload.bin")
-                .to_string();
-            let part = multipart::Part::bytes(bytes).file_name(filename);
-            form = form.part(file.field.clone(), part);
+        if !status.is_success() {
+            bail!("HTTP {}: {}", status, body);
         }
 
+        Ok(body)
+    }
+
+    fn is_challenge(&self, status: StatusCode, body: &str) -> bool {
+        self.needs_cf_bypass
+            && ((status == StatusCode::FORBIDDEN && is_cloudflare_challenge(body))
+                || (status.is_success() && is_cloudflare_challenge(body)))
+    }
+
+    async fn retry_get(&self, url: &Url) -> Result<String> {
+        Ok(self.http.get(url.clone()).send().await?.error_for_status()?.text().await?)
+    }
+
+    async fn retry_post_form(&self, url: &Url, form: &[(&str, &str)]) -> Result<String> {
+        Ok(self.http.post(url.clone()).form(form).send().await?.error_for_status()?.text().await?)
+    }
+
+    async fn retry_post_form_owned(
+        &self,
+        url: &Url,
+        form: &HashMap<String, String>,
+    ) -> Result<String> {
+        Ok(self.http.post(url.clone()).form(form).send().await?.error_for_status()?.text().await?)
+    }
+
+    async fn retry_post_multipart(
+        &self,
+        url: &Url,
+        fields: &HashMap<String, String>,
+        files: &[UploadFile],
+    ) -> Result<String> {
         Ok(self
             .http
-            .post(url)
-            .multipart(form)
+            .post(url.clone())
+            .multipart(build_multipart_form(fields, files).await?)
             .send()
             .await?
             .error_for_status()?
@@ -445,24 +490,96 @@ impl VBulletinClient {
             .await?)
     }
 
-    async fn bypass_cloudflare(&self, url: &url::Url) -> Result<String> {
-        let mut bypass = self.cf_bypass.write().await;
-        let bypass = bypass
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Cloudflare bypass not configured for this client"))?;
-
-        let (html, _cookies) = bypass.solve(url.as_str(), &self.cfg.cookie_header).await?;
-        Ok(html)
+    fn store_solution_cookies(&self, url: &Url, solution: &antibot_rs::Solution) {
+        for cookie in &solution.cookies {
+            self.cookie_jar
+                .add_cookie_str(&format!("{}={}", cookie.name, cookie.value), url);
+        }
     }
+}
+
+fn seed_cookie_jar(cookie_jar: &Jar, base_url: &Url, cookie_header: &str) {
+    for pair in cookie_header.split(';') {
+        let pair = pair.trim();
+        if pair.is_empty() || !pair.contains('=') {
+            continue;
+        }
+        cookie_jar.add_cookie_str(pair, base_url);
+    }
+}
+
+async fn build_multipart_form(
+    fields: &HashMap<String, String>,
+    files: &[UploadFile],
+) -> Result<Form> {
+    let mut form = Form::new();
+
+    for (key, value) in fields {
+        form = form.text(key.clone(), value.clone());
+    }
+
+    for file in files {
+        let bytes = tokio::fs::read(&file.path).await?;
+        let filename = Path::new(&file.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("upload.bin")
+            .to_string();
+        let part = Part::bytes(bytes).file_name(filename);
+        form = form.part(file.field.clone(), part);
+    }
+
+    Ok(form)
+}
+
+fn forum_path(forum_id: &str) -> String {
+    resource_path_or(forum_id, |id| format!("forumdisplay.php?f={id}"))
+}
+
+fn thread_path(thread_id: &str) -> String {
+    resource_path_or(thread_id, |id| format!("showthread.php?t={id}"))
+}
+
+fn profile_path(user_id: &str) -> String {
+    resource_path_or(user_id, |id| format!("member.php?u={id}"))
+}
+
+fn resource_path_or(input: &str, fallback: impl FnOnce(&str) -> String) -> String {
+    if looks_like_resource_path(input) {
+        normalize_resource_path(input)
+    } else {
+        fallback(input)
+    }
+}
+
+fn looks_like_resource_path(input: &str) -> bool {
+    input.contains('/') || input.ends_with(".html") || input.starts_with("http://") || input.starts_with("https://")
+}
+
+fn normalize_resource_path(input: &str) -> String {
+    if let Ok(url) = Url::parse(input) {
+        let mut path = url.path().trim_start_matches('/').to_string();
+        if let Some(stripped) = path.strip_prefix("forum/") {
+            path = stripped.to_string();
+        }
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        return path;
+    }
+
+    input
+        .trim_start_matches('/')
+        .trim_start_matches("forum/")
+        .to_string()
 }
 
 fn urlencoding(input: &str) -> String {
     url::form_urlencoded::byte_serialize(input.as_bytes()).collect()
 }
 
-/// Check if response body is a Cloudflare challenge page
 fn is_cloudflare_challenge(body: &str) -> bool {
-    // Cloudflare challenge patterns
     body.contains("cf-browser-verification")
         || body.contains("cf_clearance")
         || body.contains("Checking your browser")
@@ -471,8 +588,6 @@ fn is_cloudflare_challenge(body: &str) -> bool {
         || body.contains("challenge-platform")
         || body.contains("ray id:")
         || body.contains("__cf_bm")
-        || (body.contains("403 Forbidden") && body.contains("cloudflare"))
-        // Additional Cloudflare bot detection
         || body.contains("cf-wrapper")
         || body.contains("cf-error-code")
         || body.contains("cf-cdn-container")

@@ -1,4 +1,5 @@
 use maplit::hashmap;
+use std::{collections::HashMap, path::PathBuf};
 use unknowncheats_mcp::config::Config;
 
 #[test]
@@ -62,4 +63,25 @@ fn redacts_cookies_from_debug_output() {
     assert!(!rendered.contains("super-secret"));
     assert!(!rendered.contains("ep-super-secret"));
     assert!(rendered.contains("<redacted>"));
+}
+
+#[test]
+fn env_example_is_parseable_and_contains_required_keys() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env.example");
+    let vars: HashMap<String, String> = dotenvy::from_path_iter(path)
+        .unwrap()
+        .map(|item| item.unwrap())
+        .collect();
+
+    assert_eq!(
+        vars.get("UC_BASE_URL").map(String::as_str),
+        Some("https://www.unknowncheats.me/forum/")
+    );
+    assert_eq!(
+        vars.get("EP_BASE_URL").map(String::as_str),
+        Some("https://www.elitepvpers.com/forum/")
+    );
+    assert!(vars.contains_key("UC_COOKIE"));
+    assert!(vars.contains_key("EP_COOKIE"));
+    assert_eq!(vars.get("UC_ENABLE_WRITES").map(String::as_str), Some("false"));
 }

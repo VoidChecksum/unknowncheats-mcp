@@ -70,14 +70,14 @@ Add to your MCP client:
 
 ```env
 UC_BASE_URL=https://www.unknowncheats.me/forum/
-UC_COOKIE=bbsessionhash=...; darktheme_enabled=1
-UC_USERNAME=optional@example.com
-UC_PASSWORD=optional-password
+UC_COOKIE="bbsessionhash=...; bbuserid=...; bbpassword=...; darktheme_enabled=1"
+UC_USERNAME=
+UC_PASSWORD=
 
 EP_BASE_URL=https://www.elitepvpers.com/forum/
-EP_COOKIE=bbsessionhash=...; vbseo_loggedin=yes
-EP_USERNAME=optional-user
-EP_PASSWORD=optional-password
+EP_COOKIE="bbsessionhash=...; bbuserid=...; bbpassword=...; vbseo_loggedin=yes"
+EP_USERNAME=
+EP_PASSWORD=
 
 UC_ENABLE_WRITES=false
 ```
@@ -92,22 +92,20 @@ UC_ENABLE_WRITES=false
 
 ---
 
-## Cloudflare Bypass (Elitepvpers)
+## Cloudflare Bypass
 
-Elitepvpers uses Cloudflare protection. The MCP handles this two ways:
+Both UnknownCheats and Elitepvpers may present Cloudflare challenges.
 
 **Automatic (requires Docker):**
-- When EPVP returns 403 with a Cloudflare challenge, the MCP auto-spawns [Byparr](https://github.com/AstralShiro/Byparr) (a FlareSolverr-compatible solver) via Docker
-- Solves the challenge, extracts `cf_clearance` cookie, caches it for future requests
-- Zero-config if Docker is available
+- When a request returns a Cloudflare challenge, the MCP auto-spawns [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) via Docker
+- Seeds the browser session with your forum cookies, solves the challenge, and reuses the provider session for later requests
+- Used for challenged GETs and form-encoded POSTs; multipart uploads are warmed via FlareSolverr and retried through `reqwest`
 
 **Manual (no Docker):**
-1. Visit https://www.elitepvpers.com/forum/ in a browser
+1. Visit the forum in a browser
 2. Complete the Cloudflare check
-3. Export ALL cookies from browser devtools (Application > Cookies)
-4. Include `cf_clearance` in `EP_COOKIE`: `bbsessionhash=...; cf_clearance=...`
-
-UnknownCheats doesn't use Cloudflare - regular session cookies work directly.
+3. Export all cookies from browser devtools (Application > Cookies)
+4. Include `cf_clearance` in the matching `*_COOKIE` value if present
 
 ---
 

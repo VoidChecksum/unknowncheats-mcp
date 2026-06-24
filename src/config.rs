@@ -1,5 +1,5 @@
-use anyhow::{bail, Result};
-use std::{collections::HashMap, fmt};
+use anyhow::{Context, Result, bail};
+use std::{collections::HashMap, fmt, path::Path};
 use url::Url;
 
 #[derive(Clone)]
@@ -19,7 +19,10 @@ pub struct ForumConfig {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let _ = dotenvy::dotenv();
+        if Path::new(".env").exists() {
+            dotenvy::from_filename_override(".env")
+                .context("failed to load .env from current directory")?;
+        }
         Self::from_env_map(std::env::vars().collect())
     }
 
