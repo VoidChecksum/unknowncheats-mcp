@@ -66,6 +66,25 @@ fn redacts_cookies_from_debug_output() {
 }
 
 #[test]
+fn from_env_file_accepts_raw_cookie_semicolons() {
+    let path = std::env::temp_dir().join("unknowncheats-mcp-raw-cookie.env");
+    std::fs::write(
+        &path,
+        "UC_COOKIE=bbsessionhash=secret; darktheme_enabled=1; bbuserid=1\nUC_ENABLE_WRITES=false\n",
+    )
+    .unwrap();
+
+    let cfg = Config::from_env_file(&path).unwrap();
+
+    assert_eq!(
+        cfg.unknowncheats.cookie_header,
+        "bbsessionhash=secret; darktheme_enabled=1; bbuserid=1"
+    );
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn env_example_is_parseable_and_contains_required_keys() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env.example");
     let vars: HashMap<String, String> = dotenvy::from_path_iter(path)
@@ -83,5 +102,8 @@ fn env_example_is_parseable_and_contains_required_keys() {
     );
     assert!(vars.contains_key("UC_COOKIE"));
     assert!(vars.contains_key("EP_COOKIE"));
-    assert_eq!(vars.get("UC_ENABLE_WRITES").map(String::as_str), Some("false"));
+    assert_eq!(
+        vars.get("UC_ENABLE_WRITES").map(String::as_str),
+        Some("false")
+    );
 }

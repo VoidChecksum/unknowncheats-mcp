@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::{collections::HashMap, fmt, path::Path};
 use url::Url;
 
@@ -15,15 +15,22 @@ pub struct ForumConfig {
     pub cookie_header: String,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub fetch_cmd: Option<String>,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        let mut env: HashMap<String, String> = std::env::vars().collect();
         if Path::new(".env").exists() {
-            dotenvy::from_filename_override(".env")
-                .context("failed to load .env from current directory")?;
+            env.extend(read_env_file(Path::new(".env"))?);
         }
-        Self::from_env_map(std::env::vars().collect())
+        Self::from_env_map(env)
+    }
+
+    pub fn from_env_file(path: &Path) -> Result<Self> {
+        let mut env: HashMap<String, String> = std::env::vars().collect();
+        env.extend(read_env_file(path)?);
+        Self::from_env_map(env)
     }
 
     pub fn from_env_map(env: HashMap<String, String>) -> Result<Self> {
@@ -69,8 +76,35 @@ impl ForumConfig {
             cookie_header,
             username: env.get(&format!("{prefix}_USERNAME")).cloned(),
             password: env.get(&format!("{prefix}_PASSWORD")).cloned(),
+            fetch_cmd: env
+                .get(&format!("{prefix}_FETCH_CMD"))
+                .or_else(|| env.get("FORUM_FETCH_CMD"))
+                .cloned()
+                .filter(|value| !value.trim().is_empty()),
         })
     }
+}
+
+fn read_env_file(path: &Path) -> Result<HashMap<String, String>> {
+    let text =
+        std::fs::read_to_string(path).context("failed to read .env from current directory")?;
+    let mut env = HashMap::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+        env.insert(key.trim().to_string(), value);
+    }
+    Ok(env)
 }
 
 impl fmt::Debug for Config {

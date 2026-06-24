@@ -96,16 +96,22 @@ UC_ENABLE_WRITES=false
 
 Both UnknownCheats and Elitepvpers may present Cloudflare challenges.
 
-**Automatic (requires Docker):**
-- When a request returns a Cloudflare challenge, the MCP auto-spawns [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) via Docker
-- Seeds the browser session with your forum cookies, solves the challenge, and reuses the provider session for later requests
-- Used for challenged GETs and form-encoded POSTs; multipart uploads are warmed via FlareSolverr and retried through `reqwest`
+**Automatic:**
+- First, the MCP uses authenticated `reqwest` with your forum cookies.
+- If a response is a Cloudflare challenge, it tries FlareSolverr through `antibot-rs`.
+- If FlareSolverr is unavailable or fails, set `UC_FETCH_CMD` or `FORUM_FETCH_CMD` to a local stealth fetch command. The command receives the URL as argv[1], receives cookies in `FORUM_COOKIE`, and must print HTML to stdout.
 
-**Manual (no Docker):**
-1. Visit the forum in a browser
-2. Complete the Cloudflare check
-3. Export all cookies from browser devtools (Application > Cookies)
-4. Include `cf_clearance` in the matching `*_COOKIE` value if present
+Local tested fetch command:
+
+```env
+UC_FETCH_CMD=/tmp/unknowncheats-mcp/tools/uc-fetch.py
+```
+
+**Manual cookie refresh:**
+1. Visit the forum in a browser.
+2. Complete the Cloudflare check.
+3. Export all cookies from browser devtools (Application > Cookies).
+4. Include `cf_clearance` in the matching `*_COOKIE` value if present.
 
 ---
 

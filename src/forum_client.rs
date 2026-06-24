@@ -3,14 +3,14 @@ use crate::{
     config::{Config, ForumConfig},
     parser,
 };
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use reqwest::{
-    Client, StatusCode,
     cookie::Jar,
     header,
     multipart::{Form, Part},
+    Client, StatusCode,
 };
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, process::Command, sync::Arc};
 use tracing::info;
 use url::Url;
 
@@ -150,7 +150,9 @@ impl<'a> ForumHandle<'a> {
     }
 
     pub async fn subscribed_threads(&self) -> Result<String> {
-        self.client.get("subscription.php?do=viewsubscription").await
+        self.client
+            .get("subscription.php?do=viewsubscription")
+            .await
     }
 
     pub async fn attachments(&self) -> Result<String> {
@@ -175,19 +177,19 @@ impl<'a> ForumHandle<'a> {
             ("message", body),
             ("sbutton", "Submit Reply"),
         ];
-        self.client.post_form("newreply.php?do=postreply&t=", form).await
+        self.client
+            .post_form("newreply.php?do=postreply&t=", form)
+            .await
     }
 
-    pub async fn create_thread(
-        &self,
-        forum_id: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<String> {
+    pub async fn create_thread(&self, forum_id: &str, title: &str, body: &str) -> Result<String> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let page = self.client.get(&format!("newthread.php?do=newthread&f={}", forum_id)).await?;
+        let page = self
+            .client
+            .get(&format!("newthread.php?do=newthread&f={}", forum_id))
+            .await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "postthread"),
@@ -197,15 +199,12 @@ impl<'a> ForumHandle<'a> {
             ("message", body),
             ("sbutton", "Submit New Thread"),
         ];
-        self.client.post_form("newthread.php?do=postthread&f=", form).await
+        self.client
+            .post_form("newthread.php?do=postthread&f=", form)
+            .await
     }
 
-    pub async fn send_private_message(
-        &self,
-        to: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<String> {
+    pub async fn send_private_message(&self, to: &str, title: &str, body: &str) -> Result<String> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
@@ -226,7 +225,10 @@ impl<'a> ForumHandle<'a> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let page = self.client.get(&format!("editpost.php?do=editpost&p={}", post_id)).await?;
+        let page = self
+            .client
+            .get(&format!("editpost.php?do=editpost&p={}", post_id))
+            .await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "updatepost"),
@@ -244,7 +246,10 @@ impl<'a> ForumHandle<'a> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let page = self.client.get(&format!("editpost.php?do=deletepost&p={}", post_id)).await?;
+        let page = self
+            .client
+            .get(&format!("editpost.php?do=deletepost&p={}", post_id))
+            .await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "deletepost"),
@@ -253,14 +258,19 @@ impl<'a> ForumHandle<'a> {
             ("deletepost", "delete"),
             ("reason", reason),
         ];
-        self.client.post_form("editpost.php?do=deletepost", form).await
+        self.client
+            .post_form("editpost.php?do=deletepost", form)
+            .await
     }
 
     pub async fn report_post(&self, post_id: &str, reason: &str) -> Result<String> {
         if !self.enable_writes {
             bail!("Writes are disabled. Set UC_ENABLE_WRITES=true to enable.");
         }
-        let page = self.client.get(&format!("report.php?p={}", post_id)).await?;
+        let page = self
+            .client
+            .get(&format!("report.php?p={}", post_id))
+            .await?;
         let token = parser::extract_security_token(&page);
         let form = &[
             ("do", "sendemail"),
@@ -344,13 +354,28 @@ impl VBulletinClient {
 
         if self.is_challenge(status, &body) {
             info!("Cloudflare challenge detected for GET {}", url);
-            let solution = self.cf_bypass.solve_get(url.as_str(), &self.cfg.cookie_header).await?;
-            self.store_solution_cookies(&url, &solution);
-            let html = solution.html().to_string();
-            if !html.is_empty() {
-                return Ok(html);
+            match self
+                .cf_bypass
+                .solve_get(url.as_str(), &self.cfg.cookie_header)
+                .await
+            {
+                Ok(solution) => {
+                    self.store_solution_cookies(&url, &solution);
+                    let html = solution.html().to_string();
+                    if !html.is_empty() {
+                        return Ok(html);
+                    }
+                    return self.retry_get(&url).await;
+                }
+                Err(err) => {
+                    if let Some(html) = self.external_fetch(&url)? {
+                        return Ok(html);
+                    }
+                    bail!(
+                        "Cloudflare challenge detected and bypass failed: {err}. Refresh forum cookies including cf_clearance, or set UC_FETCH_CMD/FORUM_FETCH_CMD to a local stealth fetch command."
+                    );
+                }
             }
-            return self.retry_get(&url).await;
         }
 
         if !status.is_success() {
@@ -458,11 +483,26 @@ impl VBulletinClient {
     }
 
     async fn retry_get(&self, url: &Url) -> Result<String> {
-        Ok(self.http.get(url.clone()).send().await?.error_for_status()?.text().await?)
+        Ok(self
+            .http
+            .get(url.clone())
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?)
     }
 
     async fn retry_post_form(&self, url: &Url, form: &[(&str, &str)]) -> Result<String> {
-        Ok(self.http.post(url.clone()).form(form).send().await?.error_for_status()?.text().await?)
+        Ok(self
+            .http
+            .post(url.clone())
+            .form(form)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?)
     }
 
     async fn retry_post_form_owned(
@@ -470,7 +510,15 @@ impl VBulletinClient {
         url: &Url,
         form: &HashMap<String, String>,
     ) -> Result<String> {
-        Ok(self.http.post(url.clone()).form(form).send().await?.error_for_status()?.text().await?)
+        Ok(self
+            .http
+            .post(url.clone())
+            .form(form)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?)
     }
 
     async fn retry_post_multipart(
@@ -488,6 +536,21 @@ impl VBulletinClient {
             .error_for_status()?
             .text()
             .await?)
+    }
+
+    fn external_fetch(&self, url: &Url) -> Result<Option<String>> {
+        let Some(cmd) = &self.cfg.fetch_cmd else {
+            return Ok(None);
+        };
+        let output = Command::new(cmd)
+            .arg(url.as_str())
+            .env("FORUM_COOKIE", &self.cfg.cookie_header)
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("external fetch command failed: {}", stderr.trim());
+        }
+        Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
     }
 
     fn store_solution_cookies(&self, url: &Url, solution: &antibot_rs::Solution) {
@@ -553,7 +616,10 @@ fn resource_path_or(input: &str, fallback: impl FnOnce(&str) -> String) -> Strin
 }
 
 fn looks_like_resource_path(input: &str) -> bool {
-    input.contains('/') || input.ends_with(".html") || input.starts_with("http://") || input.starts_with("https://")
+    input.contains('/')
+        || input.ends_with(".html")
+        || input.starts_with("http://")
+        || input.starts_with("https://")
 }
 
 fn normalize_resource_path(input: &str) -> String {
